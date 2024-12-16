@@ -4,9 +4,6 @@ import logging
 
 from LumpParser import LumpParser
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
-
 class WADManager:
     def __init__(self, filepath):
         self.filepath = filepath
@@ -33,13 +30,30 @@ class WADManager:
         """Reads the WAD file and loads its header and lump directory."""
         logging.info(f"Reading WAD file: {self.filepath}")
         with open(self.filepath, "rb") as f:
+            # Read header
             self.header["type"] = f.read(4)
             self.header["lump_count"], self.header["lump_offset"] = struct.unpack("<II", f.read(8))
+            
+            # Read directory entries
             f.seek(self.header["lump_offset"])
+            directory = []
             for _ in range(self.header["lump_count"]):
                 lump_offset, lump_size = struct.unpack("<II", f.read(8))
                 lump_name = f.read(8).rstrip(b"\x00").decode("ascii")
-                self.lumps.append({"name": lump_name, "offset": lump_offset, "size": lump_size})
+                directory.append((lump_name, lump_offset, lump_size))
+            
+            # Read actual lump data
+            for lump_name, lump_offset, lump_size in directory:
+                f.seek(lump_offset)
+                lump_data = f.read(lump_size) if lump_size > 0 else b""
+                self.lumps.append({
+                    "name": lump_name,
+                    "offset": lump_offset,
+                    "size": lump_size,
+                    "data": lump_data
+                })
+                logging.debug(f"Loaded lump: {lump_name}, size: {lump_size} bytes")
+                
         logging.debug(f"Loaded {len(self.lumps)} lumps from WAD file.")
 
     def save(self):
@@ -175,6 +189,14 @@ class WADManager:
         print(f"Lump count: {self.header['lump_count']} (0x{self.header['lump_count']:08x})")
         print(f"Directory offset: {self.header['lump_offset']} (0x{self.header['lump_offset']:08x})")
         
+        if verbosity >= 3:
+            print("\n  Raw header (hex):")
+            header_bytes = (
+                self.header['type'] +
+                struct.pack("<II", self.header['lump_count'], self.header['lump_offset'])
+            )
+            LumpParser.hex_dump(None, header_bytes, "  ")
+
         print("\n=== LUMPS ===")
         if verbosity == 0:
             print("IDX  NAME")
@@ -186,12 +208,22 @@ class WADManager:
             print("-" * 42)
             for idx, lump in enumerate(self.lumps):
                 offset = lump.get('offset', 0)
-                size = lump.get('size', len(lump.get('data', b'')))
+                size = len(lump.get('data', b''))
                 print(f"{idx:03d} {lump['name']:<10} "
                       f"{offset:10d} (0x{offset:08x}) "
                       f"{size:10d} (0x{size:08x})")
                 
-                if size > 0 and lump['name'] in self.parsers:
-                    parser = self.parsers[lump['name']]
-                    parsed_data = parser.parse(lump.get('data', b''))
-                    parser.display(parsed_data, verbosity)
+                if size > 0:
+                    if lump['name'] in self.parsers:
+                        try:
+                            parser = self.parsers[lump['name']]
+                            parsed_data = parser.parse(lump['data'])
+                            parser.display(parsed_data, verbosity)
+                        except Exception as e:
+                            logging.warning(f"Failed to parse {lump['name']}: {e}")
+                            if verbosity >= 3:
+                                print("\n  Raw data (hex):")
+                                LumpParser.hex_dump(None, lump['data'])
+                    elif verbosity >= 3:
+                        print("\n  Raw data (hex):")
+                        LumpParser.hex_dump(None, lump['data'])

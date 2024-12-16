@@ -1,3 +1,5 @@
 *.wad
 *.swp
 *.png
+__pycache__/
+*.py[cod]
