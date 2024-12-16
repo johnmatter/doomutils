@@ -101,15 +101,24 @@ class WADManager:
         logging.debug(f"Inserted lump: {name} at index: {index}, size: {len(data)} bytes.")
 
     def ensure_markers(self, start_marker, end_marker):
-        """Ensures that start and end markers exist; adds them if necessary."""
+        """Ensures that start and end markers exist in the correct order."""
         start_index = self.find_lump_index(start_marker)
         end_index = self.find_lump_index(end_marker)
+        
+        # Remove existing markers if they're in wrong order
+        if start_index is not None and end_index is not None and start_index > end_index:
+            self.lumps.pop(end_index)
+            self.lumps.pop(start_index)
+            start_index = end_index = None
+        
+        # Add markers if missing
         if start_index is None:
             self.add_lump(start_marker, b"")
             start_index = len(self.lumps) - 1
         if end_index is None:
             self.add_lump(end_marker, b"")
             end_index = len(self.lumps) - 1
+        
         return start_index, end_index
 
     def import_texture_patch(self, patch_name, patch_data):
@@ -227,3 +236,62 @@ class WADManager:
                     elif verbosity >= 3:
                         print("\n  Raw data (hex):")
                         LumpParser.hex_dump(None, lump['data'])
+
+    def validate_sprite(self, sprite_data: bytes) -> bool:
+        """Validates sprite data format."""
+        if len(sprite_data) < 8:  # Minimum header size
+            return False
+        try:
+            width, height = struct.unpack("<HH", sprite_data[:4])
+            return len(sprite_data) >= 8 + (width * height)
+        except struct.error:
+            return False
+
+    def import_sprite(self, sprite_name, sprite_data):
+        """Imports a validated sprite between S_START and S_END markers."""
+        if not self.validate_sprite(sprite_data):
+            raise ValueError(f"Invalid sprite data format for {sprite_name}")
+        if len(sprite_name) > 8:
+            raise ValueError("Sprite name cannot exceed 8 characters")
+        
+        start_marker = "S_START"
+        end_marker = "S_END"
+        start_index, end_index = self.ensure_markers(start_marker, end_marker)
+        self.insert_lump(end_index, sprite_name, sprite_data)
+
+    def organize_lumps(self):
+        """Organizes lumps in standard WAD order."""
+        # Standard order: MAP lumps, Patches, Sprites, Flats
+        sections = {
+            'maps': [],
+            'patches': {'start': 'P_START', 'end': 'P_END', 'lumps': []},
+            'sprites': {'start': 'S_START', 'end': 'S_END', 'lumps': []},
+            'flats': {'start': 'F_START', 'end': 'F_END', 'lumps': []}
+        }
+        
+        # Collect lumps by section
+        current_map = None
+        for lump in self.lumps:
+            name = lump['name']
+            if name.startswith('MAP') or name.startswith('E'):
+                current_map = [lump]
+            elif current_map is not None and name in ['THINGS', 'LINEDEFS', 'SIDEDEFS', 'VERTEXES', 'SEGS', 'SSECTORS', 'NODES', 'SECTORS', 'REJECT', 'BLOCKMAP']:
+                current_map.append(lump)
+            elif name in ['P_START', 'P_END', 'S_START', 'S_END', 'F_START', 'F_END']:
+                continue
+            else:
+                # Add to appropriate section
+                for section in sections.values():
+                    if isinstance(section, dict):
+                        section['lumps'].append(lump)
+        
+        # Rebuild lumps list in correct order
+        self.lumps = []
+        for map_lumps in sections['maps']:
+            self.lumps.extend(map_lumps)
+        
+        for section in ['patches', 'sprites', 'flats']:
+            if sections[section]['lumps']:
+                self.add_lump(sections[section]['start'], b"")
+                self.lumps.extend(sections[section]['lumps'])
+                self.add_lump(sections[section]['end'], b"")
