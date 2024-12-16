@@ -5,8 +5,9 @@ import logging
 from LumpParser import LumpParser
 
 class WADManager:
-    def __init__(self, filepath):
+    def __init__(self, filepath, output_path=None):
         self.filepath = filepath
+        self.output_path = filepath if output_path is None else output_path
         self.lumps = []
         self.header = {
             "type": b"PWAD",
@@ -58,8 +59,8 @@ class WADManager:
 
     def save(self):
         """Writes the WAD file with updated header and lump directory."""
-        logging.info(f"Saving WAD file: {self.filepath}")
-        with open(self.filepath, "wb") as f:
+        logging.info(f"Saving WAD file: {self.output_path}")
+        with open(self.output_path, "wb") as f:
             # Write header
             f.write(self.header["type"])
             f.write(struct.pack("<II", len(self.lumps), 12 + len(self.lumps) * 16))
@@ -295,3 +296,25 @@ class WADManager:
                 self.add_lump(sections[section]['start'], b"")
                 self.lumps.extend(sections[section]['lumps'])
                 self.add_lump(sections[section]['end'], b"")
+
+    def validate(self):
+        """Validates the WAD file."""
+        for lump in self.lumps:
+            # TODO: validation checks for other lumps
+            if lump['name'] == 'S_START':
+                sprite_data = lump['data']
+                if not self.validate_sprite(sprite_data):
+                    raise ValueError(f"Invalid sprite data format for {lump['name']}")
+        # self.organize_lumps()
+        # self.save()
+        logging.info("WAD file validated.")# and organized.")
+
+    def append(self, image_path, lump_type):
+        """Appends a file to the current WAD."""
+        if image_path is None:
+            raise ValueError("Image path is required")
+        if lump_type not in self.parsers:
+            raise ValueError(f"Invalid lump type: {lump_type}")
+        parser = self.parsers[lump_type]
+        parser.parse(image_path)
+        self.add_lump(lump_type, parser.parse(image_path))

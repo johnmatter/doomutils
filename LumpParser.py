@@ -5,6 +5,8 @@ import sys
 from collections import namedtuple
 import logging
 from typing import Any, Callable
+from PIL import Image
+        
 
 # Data structures for parsed lumps
 Thing = namedtuple('Thing', 'x y angle type flags')
@@ -44,6 +46,23 @@ class LumpParser(ABC):
     def parse(self, data: bytes) -> list:
         """Parse the lump data into a list of named tuples."""
         pass
+
+    @abstractmethod
+    def encode(self, data: Any) -> bytes:
+        """Encode the data into a binary format.
+        
+        Args:
+            data: The data to encode. Could be:
+                - A filename (str) for image-based lumps (sprites, flats)
+                - A list of namedtuples for structural lumps (things, vertexes, etc.)
+                - Raw bytes for direct binary data
+                
+        Returns:
+            bytes: The encoded binary data in WAD format
+        """
+        if isinstance(data, bytes):
+            return data
+        raise NotImplementedError("Encode method must be implemented by subclass")
     
     def base_display(self, data: Any, verbosity: int, display_func: Callable) -> None:
         """Base display method with common verbosity handling.
@@ -108,6 +127,21 @@ class ThingsParser(LumpParser):
                       f"{thing.type:6d} {thing.flags:6d}")
         self.base_display(things, verbosity, display_things)
 
+    def encode(self, things: list[Thing]) -> bytes:
+        """Encode a list of Things into binary format.
+        
+        Args:
+            things: List of Thing namedtuples
+            
+        Returns:
+            bytes: Binary thing data
+        """
+        result = bytearray()
+        for thing in things:
+            result.extend(struct.pack("<hhHHH", 
+                thing.x, thing.y, thing.angle, thing.type, thing.flags))
+        return bytes(result)
+
 class VertexesParser(LumpParser):
     lump_name = "VERTEXES"
     RECORD_SIZE = struct.calcsize("<hh")  # 4 bytes
@@ -131,6 +165,13 @@ class VertexesParser(LumpParser):
             for vertex in data:
                 print(f"  {vertex.x:6d} {vertex.y:6d}")
         self.base_display(vertices, verbosity, display_vertices)
+
+    def encode(self, vertices: list[Vertex]) -> bytes:
+        """Encode a list of Vertices into binary format."""
+        result = bytearray()
+        for vertex in vertices:
+            result.extend(struct.pack("<hh", vertex.x, vertex.y))
+        return bytes(result)
 
 class LinedefsParser(LumpParser):
     lump_name = "LINEDEFS"
@@ -156,6 +197,20 @@ class LinedefsParser(LumpParser):
                 print(f"  {linedef.start:6d} {linedef.end:6d} {linedef.flags:6d} "
                       f"{linedef.special:6d} {linedef.tag:6d}")
         self.base_display(linedefs, verbosity, display_linedefs)
+
+    def encode(self, linedefs: list[Linedef]) -> bytes:
+        """Encode a list of Linedefs into binary format."""
+        result = bytearray()
+        for linedef in linedefs:
+            result.extend(struct.pack("<HHHHHHH",
+                linedef.start_vertex,
+                linedef.end_vertex,
+                linedef.flags,
+                linedef.special_type,
+                linedef.sector_tag,
+                linedef.right_sidedef,
+                linedef.left_sidedef))
+        return bytes(result)
 
 class SectorsParser(LumpParser):
     lump_name = "SECTORS"
@@ -186,6 +241,20 @@ class SectorsParser(LumpParser):
                 print(f"  {sector.floor_height:6d} {sector.ceiling_height:6d} "
                       f"{sector.light:6d} {sector.special:6d} {sector.tag:6d}")
         self.base_display(sectors, verbosity, display_sectors)
+
+    def encode(self, sectors: list[Sector]) -> bytes:
+        """Encode a list of Sectors into binary format."""
+        result = bytearray()
+        for sector in sectors:
+            result.extend(struct.pack("<hh8s8sHHH",
+                sector.floor_height,
+                sector.ceiling_height,
+                sector.floor_tex.encode('ascii').ljust(8, b'\x00'),
+                sector.ceiling_tex.encode('ascii').ljust(8, b'\x00'),
+                sector.light,
+                sector.special,
+                sector.tag))
+        return bytes(result)
 
 class SidedefsParser(LumpParser):
     lump_name = "SIDEDEFS"
@@ -218,6 +287,19 @@ class SidedefsParser(LumpParser):
                       f"{sidedef.lower_tex:<8s} {sidedef.middle_tex:<8s} {sidedef.sector:6d}")
         self.base_display(sidedefs, verbosity, display_sidedefs)
 
+    def encode(self, sidedefs: list[Sidedef]) -> bytes:
+        """Encode a list of Sidedefs into binary format."""
+        result = bytearray()
+        for sidedef in sidedefs:
+            result.extend(struct.pack("<hh8s8s8sH",
+                sidedef.x_off,
+                sidedef.y_off,
+                sidedef.upper_tex.encode('ascii').ljust(8, b'\x00'),
+                sidedef.lower_tex.encode('ascii').ljust(8, b'\x00'),
+                sidedef.middle_tex.encode('ascii').ljust(8, b'\x00'),
+                sidedef.sector))
+        return bytes(result)
+
 class SegsParser(LumpParser):
     lump_name = "SEGS"
     HEADER_SIZE = struct.calcsize("<HHHHHHH")  # 14 bytes
@@ -245,6 +327,20 @@ class SegsParser(LumpParser):
                       f"{seg.line_def:6d} {seg.side:6d} {seg.offset:6d}")
         self.base_display(segs, verbosity, display_segs)
 
+    def encode(self, segs: list[Seg]) -> bytes:
+        """Encode a list of Segs into binary format."""
+        result = bytearray()
+        for seg in segs:
+            result.extend(struct.pack("<HHHHHHH",
+                seg.start_vertex,
+                seg.end_vertex,
+                seg.angle,
+                seg.line_def,
+                seg.side,
+                seg.direction,
+                seg.offset))
+        return bytes(result)
+
 class SubsectorsParser(LumpParser):
     lump_name = "SSECTORS"
     RECORD_SIZE = struct.calcsize("<HH")  # 4 bytes
@@ -268,6 +364,14 @@ class SubsectorsParser(LumpParser):
             for subsector in data:
                 print(f"  {subsector.seg_count:6d} {subsector.first_seg:6d}")
         self.base_display(subsectors, verbosity, display_subsectors)
+
+    def encode(self, subsectors: list[Subsector]) -> bytes:
+        """Encode a list of Subsectors into binary format."""
+        result = bytearray()
+        for subsector in subsectors:
+            result.extend(struct.pack("<HH",
+                subsector.seg_count, subsector.first_seg))
+        return bytes(result)
 
 class NodesParser(LumpParser):
     lump_name = "NODES"
@@ -294,6 +398,19 @@ class NodesParser(LumpParser):
                       f"{node.right_child:11d} {node.left_child:10d}")
         self.base_display(nodes, verbosity, display_nodes)
 
+    def encode(self, nodes: list[Node]) -> bytes:
+        """Encode a list of Nodes into binary format."""
+        result = bytearray()
+        for node in nodes:
+            result.extend(struct.pack("<hhhhhhhhhhhhHH",
+                node.x, node.y, node.dx, node.dy,
+                node.right_bbox_top, node.right_bbox_bottom,
+                node.right_bbox_left, node.right_bbox_right,
+                node.left_bbox_top, node.left_bbox_bottom,
+                node.left_bbox_left, node.left_bbox_right,
+                node.right_child, node.left_child))
+        return bytes(result)
+
 class RejectParser(LumpParser):
     lump_name = "REJECT"
     RECORD_SIZE = 1  # 1 byte per sector-to-sector visibility flag
@@ -307,6 +424,10 @@ class RejectParser(LumpParser):
             print("\n  Reject Data:")
             print(f"  Size: {len(data)} bytes")
         self.base_display(reject_data, verbosity, display_reject)
+
+    def encode(self, reject_data: list[int]) -> bytes:
+        """Encode reject table into binary format."""
+        return bytes(reject_data)
 
 class BlockmapParser(LumpParser):
     lump_name = "BLOCKMAP"
@@ -331,6 +452,12 @@ class BlockmapParser(LumpParser):
             print("  " + "-" * 30)
             print(f"  {data.origin_x:4d},{data.origin_y:<4d}  {data.blocks_width:4d}x{data.blocks_height:4d}")
         self.base_display(blockmap, verbosity, display_blockmap)
+
+    def encode(self, blockmap: Blockmap) -> bytes:
+        """Encode Blockmap header into binary format."""
+        return struct.pack("<HHHH",
+            blockmap.origin_x, blockmap.origin_y,
+            blockmap.blocks_width, blockmap.blocks_height)
 
 class PNamesParser(LumpParser):
     lump_name = "PNAMES"
@@ -360,6 +487,16 @@ class PNamesParser(LumpParser):
             for idx, name in enumerate(data):
                 print(f"  {idx:5d}  {name}")
         self.base_display(patches, verbosity, display_patches)
+
+    def encode(self, patch_names: list[str]) -> bytes:
+        """Encode patch names into binary format."""
+        result = bytearray(struct.pack("<I", len(patch_names)))
+        for name in patch_names:
+            name_bytes = name.encode('ascii')
+            if len(name_bytes) > self.NAME_LENGTH:
+                raise ValueError(f"Patch name '{name}' exceeds {self.NAME_LENGTH} characters")
+            result.extend(name_bytes.ljust(self.NAME_LENGTH, b'\x00'))
+        return bytes(result)
 
 class TextureParser(LumpParser):
     lump_name = "TEXTURE1"  # Also handles TEXTURE2
@@ -406,6 +543,42 @@ class TextureParser(LumpParser):
                         print(f"    Patch {i}: ({patch.originx}, {patch.originy}) -> {patch.patch_num}")
         self.base_display(textures, verbosity, display_textures)
 
+    def encode(self, textures: list[Texture]) -> bytes:
+        """Encode texture definitions into binary format."""
+        # Calculate size needed for offset table
+        offset_table_size = 4 + (4 * len(textures))
+        current_offset = offset_table_size
+        
+        # Build texture data first
+        texture_data = bytearray()
+        offsets = []
+        
+        for texture in textures:
+            offsets.append(current_offset)
+            # Pack texture header
+            texture_data.extend(struct.pack("<8sIHHHH",
+                texture.name.encode('ascii').ljust(8, b'\x00'),
+                0,  # Unused value
+                texture.width,
+                texture.height,
+                0,  # Unused value
+                len(texture.patches)))
+            
+            # Pack patches
+            for patch in texture.patches:
+                texture_data.extend(struct.pack("<HHHHHH",
+                    patch.originx, patch.originy, patch.patch_num,
+                    patch.stepdir, patch.colormap, 0))  # Last value unused
+            
+            current_offset += len(texture_data)
+        
+        # Build final data with offset table
+        result = bytearray(struct.pack("<I", len(textures)))
+        result.extend(struct.pack(f"<{len(textures)}I", *offsets))
+        result.extend(texture_data)
+        
+        return bytes(result)
+
 class FlatParser(LumpParser):
     lump_name = "FLAT"
     RECORD_SIZE = 4096  # 64x64 pixels, 1 byte per pixel
@@ -423,6 +596,21 @@ class FlatParser(LumpParser):
             print("  Standard 64x64 flat")
         self.base_display(flat_data, verbosity, display_flat)
 
+    def encode(self, data: str) -> bytes:
+        """Encode a PNG file into a flat format (64x64 pixels, 1 byte per pixel).
+        
+        Args:
+            data: Path to PNG file
+            
+        Returns:
+            bytes: 4096 bytes of pixel data
+        """
+        with Image.open(data) as img:
+            if img.size != (64, 64):
+                img = img.resize((64, 64))
+            if img.mode != 'P':
+                img = img.convert('P', palette=Image.ADAPTIVE, colors=256)
+            return img
 class SpriteParser(LumpParser):
     lump_name = "SPRITE"
     HEADER_SIZE = struct.calcsize("<HHHHH")  # width, height, left_offset, top_offset, num_pixels
@@ -443,3 +631,28 @@ class SpriteParser(LumpParser):
             print(f"  Offset: ({data.left_offset}, {data.top_offset})")
             print(f"  Pixels: {len(data.pixels)} bytes")
         self.base_display(sprite, verbosity, display_sprite)
+
+    def encode(self, data: str) -> bytes:
+        """Encode a PNG file into a DOOM sprite format.
+        
+        Args:
+            data: Path to PNG file
+            
+        Returns:
+            bytes: Sprite header followed by pixel data
+        """
+        with Image.open(data) as img:
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+                
+            width, height = img.size
+            # Calculate sprite offset (center point)
+            left_offset = width // 2
+            top_offset = height
+            
+            # Convert to indexed color with transparency
+            img = img.convert('P', palette=Image.ADAPTIVE, colors=255)
+            
+            # Pack header
+            header = struct.pack("<HHHHH", width, height, left_offset, top_offset, width * height)
+            return header + img.tobytes()
